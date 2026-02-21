@@ -8,20 +8,55 @@ export class AwsVpcStack extends cdk.Stack {
 
     const vpc = new ec2.Vpc(this, 'NextWork VPC', {
       ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
-      natGateways: 1,
+      natGateways: 0, // Set to 0 to ensure the private subnet is truly isolated/private per the lesson
       subnetConfiguration: [
         {
-          name: 'Public-1',
-          subnetType:ec2.SubnetType.PUBLIC,
-          cidrMask: 24, // this creates a 10.0.0.x.0/24 range
+          name: 'NextWork Public Subnet',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
         },
         {
-          name: 'Private-1',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-          cidrMask: 24, // this creates a 10.0.1.x.0/24 range
+          name: 'NextWork Private Subnet',
+          // Changed to ISOLATED so it has no route to an IGW or NAT Gateway
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          cidrMask: 24,
         }
       ],
       maxAzs: 1,
     });
+
+    // 1. PUBLIC NACL (From your previous steps)
+    const nextWorkPublicNACL = new ec2.NetworkAcl(this, 'NextWork Public NACL', {
+      vpc,
+      subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
+    });
+
+    nextWorkPublicNACL.addEntry('AllowAllInbound', {
+      cidr: ec2.AclCidr.anyIpv4(),
+      ruleNumber: 100,
+      traffic: ec2.AclTraffic.allTraffic(),
+      direction: ec2.TrafficDirection.INGRESS,
+      ruleAction: ec2.Action.ALLOW,
+    });
+
+    // 2. PRIVATE NACL (Step #4 of the lesson)
+    // Custom NACLs deny all traffic by default, which is what the lesson requests
+    const nextWorkPrivateNACL = new ec2.NetworkAcl(this, 'NextWork Private NACL', {
+      vpc,
+      subnetSelection: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+    });
+
+    // 3. SECURITY GROUP (Resource level)
+    const NextWorkSG = new ec2.SecurityGroup(this, 'NextWork Security Group', {
+      vpc,
+      description: 'A security group for the NextWork VPC',
+      allowAllOutbound: true,
+    });
+
+    NextWorkSG.addIngressRule(
+        ec2.Peer.anyIpv4(),
+        ec2.Port.tcp(80),
+        'Allow HTTP access from the internet'
+    );
   }
 }
