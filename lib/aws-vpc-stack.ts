@@ -8,7 +8,7 @@ export class AwsVpcStack extends cdk.Stack {
 
     const vpc = new ec2.Vpc(this, 'NextWork VPC', {
       ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
-      natGateways: 0, // Set to 0 to ensure the private subnet is truly isolated/private per the lesson
+      natGateways: 0,
       subnetConfiguration: [
         {
           name: 'NextWork Public Subnet',
@@ -17,7 +17,6 @@ export class AwsVpcStack extends cdk.Stack {
         },
         {
           name: 'NextWork Private Subnet',
-          // Changed to ISOLATED so it has no route to an IGW or NAT Gateway
           subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
           cidrMask: 24,
         }
@@ -25,7 +24,7 @@ export class AwsVpcStack extends cdk.Stack {
       maxAzs: 1,
     });
 
-    // 1. PUBLIC NACL (From your previous steps)
+    // --- EXISTING SECURITY CONFIG ---
     const nextWorkPublicNACL = new ec2.NetworkAcl(this, 'NextWork Public NACL', {
       vpc,
       subnetSelection: { subnetType: ec2.SubnetType.PUBLIC },
@@ -39,14 +38,11 @@ export class AwsVpcStack extends cdk.Stack {
       ruleAction: ec2.Action.ALLOW,
     });
 
-    // 2. PRIVATE NACL (Step #4 of the lesson)
-    // Custom NACLs deny all traffic by default, which is what the lesson requests
     const nextWorkPrivateNACL = new ec2.NetworkAcl(this, 'NextWork Private NACL', {
       vpc,
       subnetSelection: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
     });
 
-    // 3. SECURITY GROUP (Resource level)
     const NextWorkSG = new ec2.SecurityGroup(this, 'NextWork Security Group', {
       vpc,
       description: 'A security group for the NextWork VPC',
@@ -58,5 +54,48 @@ export class AwsVpcStack extends cdk.Stack {
         ec2.Port.tcp(80),
         'Allow HTTP access from the internet'
     );
+
+    // ************************************************************
+    // START OF NEW CODE: LAUNCHING EC2 RESOURCES
+    // ************************************************************
+
+    // 1. Create a Key Pair (used for both instances)
+    const key = new ec2.KeyPair(this, 'NextWork-KeyPair', {
+      keyPairName: 'NextWork-key-pair',
+    });
+
+    // 2. Launch the Public EC2 Instance
+    const publicInstance = new ec2.Instance(this, 'NextWork Public Server', {
+      vpc,
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      securityGroup: NextWorkSG,
+      keyPair: key,
+    });
+
+    // 3. Create a Private Security Group (restricts access to the Public SG)
+    const privateSG = new ec2.SecurityGroup(this, 'NextWork Private Security Group', {
+      vpc,
+      description: 'Security group for NextWork Private Subnet',
+      allowAllOutbound: true,
+    });
+
+    // Allow SSH (Port 22) only from the Public Security Group
+    privateSG.addIngressRule(
+        NextWorkSG,
+        ec2.Port.tcp(22),
+        'Allow SSH only from the Public Security Group'
+    );
+
+    // 4. Launch the Private EC2 Instance
+    const privateInstance = new ec2.Instance(this, 'NextWork Private Server', {
+      vpc,
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.MICRO),
+      machineImage: ec2.MachineImage.latestAmazonLinux2023(),
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroup: privateSG,
+      keyPair: key,
+    });
   }
 }
